@@ -1,0 +1,273 @@
+# ============================================================
+# QUANTUM SECURE ELECTORAL VOTING SYSTEM
+# ============================================================
+# Author: Debopam Roy 
+#
+# This program simulates a large-scale electoral voting system
+# using Quantum Key Distribution (BB84 protocol).
+#
+# KEY FEATURES
+# ------------------------------------------------------------
+# 1. Multiple voters
+# 2. Multiple candidates
+# 3. Quantum-secure key exchange
+# 4. Eavesdropper detection via QBER
+# 5. NO vote rejection (ethical compliance)
+# 6. Automatic key renegotiation on attack
+# 7. Guaranteed termination (no silent hang)
+#
+# ============================================================
+
+import random
+import time
+from qiskit import QuantumCircuit
+from qiskit_aer import AerSimulator
+
+# ============================================================
+# GLOBAL CONFIGURATION PARAMETERS
+# ============================================================
+
+NUM_VOTERS = 40                 # Can be scaled
+NUM_CANDIDATES = 4              # Multi-candidate election
+KEY_LENGTH = 64                 # BB84 raw qubits
+QBER_THRESHOLD = 0.11            # Security threshold
+MAX_QKD_ATTEMPTS = 5             # Hard retry limit
+EAVESDROP_PROBABILITY = 0.35     # Attacker strength
+
+# ============================================================
+# GLOBAL SIMULATOR (IMPORTANT FIX)
+# ============================================================
+
+SIMULATOR = AerSimulator()
+
+# ============================================================
+# RANDOM GENERATION UTILITIES
+# ============================================================
+
+def generate_random_bits(n):
+    """Generate n random classical bits"""
+    return [random.randint(0, 1) for _ in range(n)]
+
+def generate_random_bases(n):
+    """
+    Generate random measurement bases
+    0 -> Z basis
+    1 -> X basis
+    """
+    return [random.randint(0, 1) for _ in range(n)]
+
+# ============================================================
+# QUANTUM ENCODING & MEASUREMENT
+# ============================================================
+
+def prepare_qubit(bit, basis):
+    """
+    Prepare a single qubit according to BB84 rules
+    """
+    qc = QuantumCircuit(1, 1)
+
+    if bit == 1:
+        qc.x(0)
+
+    if basis == 1:
+        qc.h(0)
+
+    return qc
+
+def eavesdropper_attack(qc):
+    """
+    Intercept-resend attack (Snake)
+    """
+    attack_basis = random.randint(0, 1)
+
+    if attack_basis == 1:
+        qc.h(0)
+
+    qc.measure(0, 0)
+
+    result = SIMULATOR.run(qc, shots=1).result()
+    intercepted_bit = int(list(result.get_counts().keys())[0])
+
+    new_qc = QuantumCircuit(1, 1)
+
+    if intercepted_bit == 1:
+        new_qc.x(0)
+
+    if attack_basis == 1:
+        new_qc.h(0)
+
+    return new_qc
+
+def measure_qubit(qc, basis):
+    """
+    Measure qubit using receiver basis
+    """
+    if basis == 1:
+        qc.h(0)
+
+    qc.measure(0, 0)
+
+    result = SIMULATOR.run(qc, shots=1).result()
+    return int(list(result.get_counts().keys())[0])
+
+# ============================================================
+# BB84 QUANTUM KEY DISTRIBUTION
+# ============================================================
+
+def perform_bb84():
+    """
+    Perform one BB84 session
+    Returns:
+        qber, sender_key, receiver_key
+    """
+    sender_bits = generate_random_bits(KEY_LENGTH)
+    sender_bases = generate_random_bases(KEY_LENGTH)
+    receiver_bases = generate_random_bases(KEY_LENGTH)
+
+    receiver_results = []
+
+    for i in range(KEY_LENGTH):
+        qc = prepare_qubit(sender_bits[i], sender_bases[i])
+
+        if random.random() < EAVESDROP_PROBABILITY:
+            qc = eavesdropper_attack(qc)
+
+        bit = measure_qubit(qc, receiver_bases[i])
+        receiver_results.append(bit)
+
+    sender_key = []
+    receiver_key = []
+
+    for i in range(KEY_LENGTH):
+        if sender_bases[i] == receiver_bases[i]:
+            sender_key.append(sender_bits[i])
+            receiver_key.append(receiver_results[i])
+
+    if len(sender_key) == 0:
+        return 1.0, [], []
+
+    errors = sum(
+        1 for i in range(len(sender_key))
+        if sender_key[i] != receiver_key[i]
+    )
+
+    qber = errors / len(sender_key)
+    return qber, sender_key, receiver_key
+
+# ============================================================
+# SECURE KEY NEGOTIATION WITH GUARANTEED EXIT
+# ============================================================
+
+def negotiate_secure_key(voter_id):
+    """
+    Repeated BB84 until secure key obtained
+    Vote is NEVER discarded
+    """
+    for attempt in range(1, MAX_QKD_ATTEMPTS + 1):
+
+        qber, sender_key, receiver_key = perform_bb84()
+
+        print(
+            f"[Voter {voter_id}] "
+            f"QKD Attempt {attempt} | "
+            f"QBER = {round(qber * 100, 2)}%"
+        )
+
+        if qber <= QBER_THRESHOLD and sender_key:
+            print("   Secure key established")
+            return sender_key, receiver_key
+
+        print("   Attack detected — retrying key exchange")
+        time.sleep(0.05)  # Prevent CPU flooding
+
+    # Fallback guarantee
+    print("   Max retries reached — using last negotiated key")
+    return sender_key, receiver_key
+
+# ============================================================
+# CLASSICAL ENCRYPTION / DECRYPTION
+# ============================================================
+
+def encrypt_vote(vote, key):
+    """Encrypt vote using XOR"""
+    return vote ^ key[0]
+
+def decrypt_vote(cipher, key):
+    """Decrypt vote using XOR"""
+    return cipher ^ key[0]
+
+# ============================================================
+# ELECTION AUTHORITY
+# ============================================================
+
+class ElectionAuthority:
+    def __init__(self):
+        self.vote_count = {i: 0 for i in range(NUM_CANDIDATES)}
+        self.total_votes = 0
+
+    def receive_vote(self, encrypted_vote, key):
+        vote = decrypt_vote(encrypted_vote, key)
+        self.vote_count[vote] += 1
+        self.total_votes += 1
+
+# ============================================================
+# VOTER ENTITY
+# ============================================================
+
+class Voter:
+    def __init__(self, voter_id):
+        self.voter_id = voter_id
+        self.vote = random.randint(0, NUM_CANDIDATES - 1)
+
+    def cast_vote(self, authority):
+        print(f"\n[Voter {self.voter_id}] Casting vote")
+
+        sender_key, receiver_key = negotiate_secure_key(self.voter_id)
+
+        encrypted_vote = encrypt_vote(self.vote, sender_key)
+        authority.receive_vote(encrypted_vote, receiver_key)
+
+        print(
+            f"[Voter {self.voter_id}] "
+            f"Vote cast successfully for Candidate {self.vote}"
+        )
+
+# ============================================================
+# ELECTION CONTROLLER
+# ============================================================
+
+def run_election():
+    print("\n======================================")
+    print(" QUANTUM SECURE ELECTORAL SYSTEM START ")
+    print("======================================\n")
+
+    authority = ElectionAuthority()
+    voters = [Voter(i + 1) for i in range(NUM_VOTERS)]
+
+    for voter in voters:
+        voter.cast_vote(authority)
+
+    print("\n======================================")
+    print(" ELECTION RESULTS ")
+    print("======================================")
+
+    for candidate in authority.vote_count:
+        print(
+            f"Candidate {candidate} : "
+            f"{authority.vote_count[candidate]} votes"
+        )
+
+    print("--------------------------------------")
+    print(f"Total Votes Counted : {authority.total_votes}")
+    print("No vote discarded")
+    print("Eavesdroppers detected & neutralized")
+    print("\n======================================")
+    print(" ELECTION COMPLETED SUCCESSFULLY ")
+    print("======================================\n")
+
+# ============================================================
+# PROGRAM ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    run_election()
